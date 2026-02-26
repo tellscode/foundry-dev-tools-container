@@ -7,7 +7,8 @@ aiofiles==24.1.0            # Async file handling
 SQLAlchemy==2.0.40          # SQL toolkit and ORM
 asyncpg==0.30.0             # PostgreSQL Async Driver
 
-foundry-dev-tools==2.1.15   # Access to Foundry Data
+foundry-dev-tools==2.1.23   # Access to Foundry Data
+botocore==1.42.60           # AWS stuff
 polars==1.27.1              # Fast DataFrame library with Arrow backend
 pandas==2.2.3               # Data Analysis and Manipulation
 numpy==2.2.5                # Scientific Computing Package

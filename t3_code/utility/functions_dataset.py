@@ -196,11 +196,7 @@ async def get_filtered_versions(websocket: WebSocket, rid: str, name: str, date_
     versions, message = await get_versions(rid, name)
 
     if not versions:
-        await websocket.send_json({
-            "type": "neutral",
-            "success": False,
-            "message": f"No available versions found for dataset '{name}'. {message}"
-        })
+        await send_message(websocket, "neutral", False, f"No available versions found for dataset '{name}'. {message}")
         return [], f"No versions for dataset '{name}' with RID '{rid}'. {message}"
 
     date_start_dt = datetime.fromisoformat(date_start).replace(tzinfo=None)
@@ -217,11 +213,7 @@ async def get_filtered_versions(websocket: WebSocket, rid: str, name: str, date_
     else:
         message2 = f"Found {len(filtered_versions)} versions for dataset '{rid}' between '{date_start}' and '{date_end}'."
 
-    await websocket.send_json({
-        "type": "update",
-        "success": True,
-        "message": message2
-    })
+    await send_message(websocket, "update", True, message2)
     return filtered_versions, message2
 
 
@@ -283,7 +275,7 @@ async def download_dataset(websocket: WebSocket, foundry_con: FoundryConnection,
 
         df_count = await asyncio.to_thread(
             foundry_con.foundry_context.foundry_sql_server.query_foundry_sql,
-            f"SELECT COUNT(*) FROM `ri.foundry.main.dataset.{rid}`"  # TODO: make this use the prefix defined in the foundry_datasets.toml file
+            f"SELECT COUNT(*) FROM `{foundry_con.prefix}{rid}`"
         )
 
         # Extract row count from the COUNT(*) query result (returns pandas DataFrame)
@@ -294,101 +286,25 @@ async def download_dataset(websocket: WebSocket, foundry_con: FoundryConnection,
 
         # End if no rows found
         if row_count == 0:
-            await websocket.send_json({
-                "type": "final",
-                "success": False,
-                "message": f"No rows found for dataset '{name}'."
-            })
+            await send_message(websocket, "final", False, f"No rows found for dataset '{name}'.")
             return False, ""
 
-        # CHECK IF ROWS > BATCH_SIZE AND COLUMN ID EXISTS
+        # DOWNLOAD WITH LAZY POLARS
 
-        incremental_download = False
+        await send_message(websocket, "update", True, f"Downloading all {row_count} rows for dataset '{name}'...")
 
-        if row_count > DOWNLOAD_BATCHSIZE:
-            df: pd.DataFrame = await asyncio.to_thread(  # get a row for columns
-                foundry_con.foundry_context.foundry_sql_server.query_foundry_sql,
-                f"SELECT * FROM `ri.foundry.main.dataset.{rid}` LIMIT 1"
-            )
+        dataset = foundry_con.foundry_context.get_dataset(f"{foundry_con.prefix}{rid}")
+        lazy_df: pl.LazyFrame = dataset.to_lazy_polars()
 
-            print(df, flush=True)
+        df: pl.DataFrame = await asyncio.to_thread(lazy_df.collect)
+        print(df, flush=True)
 
-            if not df.empty and "id" in df.columns:
-                incremental_download = True
+        await send_message(websocket, "update", True, f"Dataset '{name}' downloaded successfully. Writing to disk...")
 
-        # INCREMENTAL DOWNLOAD
-        if incremental_download:
+        tmp_csv_path = UNZIPPED_DIR / f"tmp_{rid}_{datetime.now(pytz.UTC).strftime('%Y%m%d_%H%M%S')}.csv"
+        df.write_csv(tmp_csv_path)
 
-            # Determine batches and start download
-            num_batches = (row_count // DOWNLOAD_BATCHSIZE) + 1
-
-            await websocket.send_json({
-                "type": "update",
-                "success": True,
-                "message": f"Found {row_count} rows in dataset '{name}', starting download in {num_batches} batch(es)."
-            })
-
-            for i in range(num_batches):
-                await websocket.send_json({
-                    "type": "update",
-                    "success": True,
-                    "message": f"Downloading batch {i + 1} of {num_batches} for dataset '{name}'..."
-                })
-
-                offset = i * DOWNLOAD_BATCHSIZE
-                limit = DOWNLOAD_BATCHSIZE
-                
-                df_batch: pd.DataFrame = await asyncio.to_thread(
-                    foundry_con.foundry_context.foundry_sql_server.query_foundry_sql,
-                    f"SELECT * FROM `ri.foundry.main.dataset.{rid}` WHERE id > {offset} AND id <= {offset + limit}"
-                )
-
-                # Create a temporary file path for writing (only once)
-                if i == 0:
-                    tmp_csv_path = UNZIPPED_DIR / f"tmp_{rid}_{datetime.now(pytz.UTC).strftime('%Y%m%d_%H%M%S')}.csv"
-                    # Write first batch with headers
-                    df_batch.to_csv(tmp_csv_path, index=False)
-                else:
-                    # Append subsequent batches without headers
-                    with open(tmp_csv_path, 'a', encoding='utf-8') as f:
-                        df_batch.to_csv(f, index=False, header=False)
-
-            await websocket.send_json({
-                "type": "update",
-                "success": True,
-                "message": f"All batches downloaded and written to temporary file for dataset '{name}'. Calculating checksum..."
-            })
-
-        # ALL AT ONCE DOWNLOAD
-        else:
-
-            await websocket.send_json({
-                "type": "update",
-                "success": True,
-                "message": f"Downloading all {row_count} rows for dataset '{name}'..."
-            })
-
-            df = await asyncio.to_thread(
-                foundry_con.foundry_context.foundry_sql_server.query_foundry_sql,
-                f"SELECT * FROM `ri.foundry.main.dataset.{rid}`"
-            )
-
-            await websocket.send_json({
-                "type": "update",
-                "success": True,
-                "message": f"Dataset '{name}' downloaded successfully. Writing to disk..."
-            })
-
-            # Create a temporary file path for writing
-            tmp_csv_path = UNZIPPED_DIR / f"tmp_{rid}_{datetime.now(pytz.UTC).strftime('%Y%m%d_%H%M%S')}.csv"
-            with open(tmp_csv_path, 'w', encoding='utf-8') as f:
-                df.to_csv(f, index=False)
-
-            await websocket.send_json({
-                "type": "update",
-                "success": True,
-                "message": f"All batches downloaded and written to temporary file for dataset '{name}'. Calculating checksum..."
-            })
+        await send_message(websocket, "update", True, f"Dataset '{name}' written to disk. Calculating checksum...")
 
         # CHECKSUM
         sha256 = await asyncio.to_thread(_compute_file_sha256, tmp_csv_path)
