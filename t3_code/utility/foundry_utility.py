@@ -1,4 +1,5 @@
 import os
+import subprocess
 import toml
 from foundry_dev_tools import FoundryContext
 
@@ -12,12 +13,14 @@ class FoundryConnection:
         try:
             self.foundry_context = FoundryConnection.get_FoundryContext_with_fresh_config(config_secret_name)
             self.prefix, self.datasets = FoundryConnection.get_prefix_and_datasets(dataset_secret_name)
-            FoundryConnection.print_fdt_info()
+            
+            FoundryConnection.print_fdt_info()  # print info in dev environemnt
             
             print("SUCCESS: FoundryConnection initialized successfully!", flush=True)
         except Exception as e:
             print(f"ERROR: Failed to initialize FoundryConnection: {str(e)}", flush=True)
             raise
+
 
     @staticmethod
     def get_FoundryContext_with_fresh_config(config_secret_name: str = "foundry_dev_tools.toml"):
@@ -66,6 +69,7 @@ class FoundryConnection:
             print(error_msg, flush=True)
             raise
 
+
     @staticmethod
     def get_prefix_and_datasets(dataset_config_name: str = "foundry_datasets.toml") -> dict:
         """ Load dataset configuration from foundry_datasets.toml secret """
@@ -93,14 +97,25 @@ class FoundryConnection:
             error_msg = f"ERROR: Failed to load dataset configuration: {str(e)}"
             print(error_msg, flush=True)
             raise
-        
+
+
     @staticmethod
     def print_fdt_info():
         """ Execute the 'fdt info' command and print the output """
+        if os.get_env("PYTHON_ENV", "production") == "development":
+            return
+
         print("INFO: Executing 'fdt info' command...", flush=True)
-        result = os.system("fdt info")
-        print(f"INFO: 'fdt info' command completed with exit code: {result}", flush=True)
+
+        result = subprocess.run(["fdt", "info"], capture_output=True, text=True)
+        if result.stdout:
+            print(result.stdout, flush=True)
+        if result.stderr:
+            print(result.stderr, flush=True)
+        
+        print(f"INFO: 'fdt info' command completed with exit code: {result.returncode}", flush=True)
         print("- - - FDT INFO WAS EXECUTED - - -", flush=True)
+
 
     def get_valid_rids(self, names: str | list[str]):
         """ Get valid RIDs for the given names """
