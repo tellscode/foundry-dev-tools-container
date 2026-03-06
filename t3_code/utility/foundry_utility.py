@@ -102,7 +102,7 @@ class FoundryConnection:
     @staticmethod
     def print_fdt_info():
         """ Execute the 'fdt info' command and print the output """
-        if os.get_env("PYTHON_ENV", "production") == "development":
+        if os.getenv("PYTHON_ENV", "production") == "development":
             return
 
         print("INFO: Executing 'fdt info' command...", flush=True)
